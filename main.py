@@ -3,6 +3,12 @@ import keyboard
 import random
 
 pygame.init()
+pygame.mixer.init()
+# Load Audios
+shoot_bullet_sound = pygame.mixer.Sound("Audio_Files/pew.mp3")
+triple_shoot_bullet_sound = pygame.mixer.Sound("Audio_Files/Triple_Pew.mp3")
+enemy_hit_sound = pygame.mixer.Sound("Audio_Files/EnemyHit.mp3")
+powerup_acquired = pygame.mixer.Sound("Audio_Files/Powerup.mp3")
 
 font = pygame.font.SysFont("Arial", 20)
 big_font = pygame.font.SysFont("Arial", 50)
@@ -43,7 +49,6 @@ class Player:
         """Return player's current position"""
         return self.x, self.y
 
-
 class Bullet:
     def __init__(self, x, y, image_path):
         self.x = x
@@ -66,7 +71,7 @@ class Bullet:
             the collision will work"""
         return self.image.get_rect(topleft=(self.x, self.y))
 
-# ============ ENEMIES CLASS ============
+# ============ ENTITIES CLASS ============
 class Enemy:
     def __init__(self, x, y, image_path):
         self.x = x
@@ -90,46 +95,90 @@ class Enemy:
 # ============ GAME CLASS ============
     """Manages game state and logic
     Such as updating shi, spawning enemies and text"""
+
+class PowerUp:
+    def __init__(self, x, y, image_path):
+        self.x = x
+        self.y = y
+        self.image = pygame.image.load(image_path)
+        self.speed = 200
+        self.active = True
+
+    def update(self, delta_time):
+        self.y += self.speed * delta_time
+
+    def draw(self, surface):
+        surface.blit(self.image, (self.x, self.y))
+
+    def is_off_screen(self):
+        return self.y > screen_height
+
+    def get_rect(self):
+        return self.image.get_rect(topleft=(self.x, self.y))
+
 class GameState:
 
     def __init__(self):
+        # Player
         self.player = Player((screen_width / 2), (screen_height - 200), "Textures/Player.png")
         self.bullets = []
         self.enemies = []
         self.screen_x = screen.get_width()
-
         # Shooting
         self.last_bullet_time = 0
         self.bullet_cooldown = 0.2  # Seconds
         self.bullets_shot = 0
 
+        # PowerUps
+        self.powerups = []
+        self.last_powerup_spawn = 0
+        self.powerup_spawn_delay = 7  # Spawn every 7 seconds
+        self.powerup_spawn_chance = 0.45  # 45% chance to spawn when delay is met
+        self.triple_shot_active = False
+        self.triple_shot_duration = 8
+        self.triple_shot_time = 0
         # Enemies
         self.last_enemy_spawn = 0
-        self.enemy_spawn_delay = 1  # One Second
+        self.enemy_spawn_delay = 1
 
         # Waves
         self.wave = 1
         self.enemies_per_wave = 5
         self.enemies_spawned = 0
         self.wave_in_progress = True
-        self.wave_cooldown = 2.0  # Time between waves in seconds
+        self.wave_cooldown = 2.0
         self.wave_cooldown_start = 0
         self.waiting_next_wave = False
         self.wave_text_timer = 0
-        self.wave_text_duration = 2.0  # Show wave text for 2 seconds
+        self.wave_text_duration = 2.0
         self.show_wave_text = True
 
         self.enemies_killed = 0
         self.enemy_attacks = 0
 
-    def shoot_bullet(self, current_time):  # NOW accepts current_time
-        """Create a bullet if cooldown is ready"""
-        if current_time - self.last_bullet_time > self.bullet_cooldown:
+    def shoot_bullet(self, current_time):
+        if current_time - self.last_bullet_time >= self.bullet_cooldown:
             player_x, player_y = self.player.get_position()
-            bullet = Bullet(player_x + 7, player_y - 15, "Textures/Bullet.png")
-            self.bullets.append(bullet)
+            player_width = self.player.width
+
+            if self.triple_shot_active:
+                # Center bullet
+                self.bullets.append(Bullet(player_x + (player_width // 2), player_y, "Textures/Bullet.png"))
+                # Left bullet (offset to the left)
+                self.bullets.append(Bullet(player_x - 15, player_y + 10, "Textures/Bullet.png"))
+                # Right bullet (offset to the right)
+                self.bullets.append(Bullet(player_x + player_width + 15, player_y + 10, "Textures/Bullet.png"))
+                triple_shoot_bullet_sound.play()
+            else:
+                # Single center bullet
+                self.bullets.append(Bullet(player_x + player_width // 2 - 8, player_y, "Textures/Bullet.png"))
+                shoot_bullet_sound.play()
             self.last_bullet_time = current_time
-            self.bullets_shot += 1
+            if self.triple_shot_time:
+                self.bullets_shot += 3
+                self.bullet_cooldown = 0.45
+            else:
+                self.bullets_shot += 1
 
     def spawn_enemy(self, current_time):
         """Create a new enemy if it's time"""
@@ -140,6 +189,15 @@ class GameState:
                 self.enemies.append(enemy)
                 self.last_enemy_spawn = current_time
                 self.enemies_spawned += 1
+
+    def spawn_powerup(self, current_time):
+        """Spawn powerups less frequently than enemies"""
+        if current_time - self.last_powerup_spawn >= self.powerup_spawn_delay:
+            # Only spawn if random chance succeeds
+            if random.random() < self.powerup_spawn_chance:
+                x = random.randint(0, screen_width - 50) #must change 50 to real width
+                self.powerups.append(PowerUp(x, 0, "Textures/PowerupTEMP.png"))
+            self.last_powerup_spawn = current_time
 
     def check_collisions(self):
         bullets_to_remove = []
@@ -160,6 +218,18 @@ class GameState:
             self.bullets.remove(bullet)
         for enemy in enemies_to_remove:
             self.enemies.remove(enemy)
+
+    def check_powerup_collision(self):
+        player_rect = self.player.image.get_rect(topleft=(self.player.x, self.player.y))
+
+        for powerup in self.powerups[:]:
+            if player_rect.colliderect(powerup.get_rect()):
+                self.activate_triple_shot()
+                powerup_acquired.play()
+                self.powerups.remove(powerup)
+    def activate_triple_shot(self):
+        self.triple_shot_active = True
+        self.triple_shot_time = self.triple_shot_duration
 
     def check_wave_complete(self, current_time):
         """Check if wave is complete and start next wave"""
@@ -192,6 +262,9 @@ class GameState:
         if keyboard.is_pressed("s"):
             self.shoot_bullet(current_time)
 
+        if not self.triple_shot_active: # sets the bullet_cooldown to normal
+            self.bullet_cooldown = 0.2
+
         for bullet in self.bullets:
             bullet.update(delta_time)
         self.bullets = [b for b in self.bullets if not b.is_off_screen()]
@@ -202,12 +275,27 @@ class GameState:
         for enemy in self.enemies:
             if enemy.is_off_screen():
                 self.enemy_attacks += 1
+                enemy_hit_sound.play()
 
         self.enemies = [e for e in self.enemies if not e.is_off_screen()]
 
         # Spawn new enemies
         if not self.waiting_next_wave:
             self.spawn_enemy(current_time)
+
+        # Manage powerups
+        self.spawn_powerup(current_time)
+
+        for powerup in self.powerups[:]:
+            powerup.update(delta_time)
+            if powerup.is_off_screen():
+                self.powerups.remove(powerup)
+        self.check_powerup_collision()
+        # Update triple shot timer
+        if self.triple_shot_active:
+            self.triple_shot_time -= delta_time
+            if self.triple_shot_time <= 0:
+                self.triple_shot_active = False
 
         self.check_collisions()
 
@@ -217,6 +305,7 @@ class GameState:
             if current_time - self.wave_text_timer > self.wave_text_duration:
                 self.show_wave_text = False
 
+
     def draw(self, surface):
         surface.fill((0, 0, 0))
 
@@ -225,7 +314,8 @@ class GameState:
             bullet.draw(surface)
         for enemy in self.enemies:
             enemy.draw(surface)
-
+        for powerup in self.powerups:
+            powerup.draw(surface)
         #Text shi
         enemy_hits = font.render(f"Enemy Hits: {self.enemy_attacks}", True, (255, 0, 0))
         score_text = font.render(f"Enemies Killed: {self.enemies_killed}", True, (255, 255, 255))
